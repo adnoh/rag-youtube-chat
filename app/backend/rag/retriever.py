@@ -8,7 +8,7 @@ chunks with their video metadata.
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def retrieve(
     query_embedding: List[float],
     k: int = 5,
-    min_score: float = 0.5,
+    min_score: Optional[float] = None,
 ) -> List[dict]:
     """
     Find the top-K chunks most similar to *query_embedding*.
@@ -29,7 +29,9 @@ async def retrieve(
         query_embedding: A list of floats representing the query vector.
         k: Maximum number of results to return (default 5).
         min_score: Minimum cosine similarity score to include a chunk.
-            Chunks below this threshold are excluded. Default 0.5.
+            Chunks below this threshold are excluded.
+            Must be in the range [-1.0, 1.0].
+            Defaults to config.RETRIEVAL_MIN_SCORE when None.
 
     Returns:
         A list of dicts (length <= k), each containing:
@@ -40,7 +42,21 @@ async def retrieve(
           - score: float (cosine similarity, -1.0 to 1.0)
         Sorted by score descending. Returns [] if the DB has no chunks
         or if no chunks meet the min_score threshold.
+
+    Raises:
+        ValueError: If min_score is outside the valid cosine similarity range
+            [-1.0, 1.0].
     """
+    from backend import config  # local import to avoid any circular dep risk
+
+    if min_score is None:
+        min_score = config.RETRIEVAL_MIN_SCORE
+
+    if not -1.0 <= min_score <= 1.0:
+        raise ValueError(
+            f"min_score={min_score!r} is outside the valid cosine similarity range [-1.0, 1.0]"
+        )
+
     # Load all chunks from the DB (includes deserialized embeddings)
     all_chunks = await repository.list_chunks()
     if not all_chunks:
@@ -87,6 +103,18 @@ async def retrieve(
                 "video_title": video_title_cache[video_id],
                 "score": score,
             }
+        )
+
+    filtered_count = top_k - len(results)
+    if filtered_count > 0:
+        # Log the top excluded score for threshold-tuning observability
+        first_excluded_idx = int(top_indices[len(results)])
+        top_excluded_score = float(scores[first_excluded_idx])
+        logger.info(
+            "retrieve: %d chunk(s) excluded by min_score=%.2f (top excluded score=%.4f)",
+            filtered_count,
+            min_score,
+            top_excluded_score,
         )
 
     return results

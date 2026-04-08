@@ -83,7 +83,11 @@ async def create_message(conv_id: str, body: MessageCreate):
     chunks: list[dict] = []
     try:
         query_embedding = embed_text(user_content)
-        chunks = await retrieve(query_embedding, k=config.RETRIEVAL_TOP_K, min_score=config.RETRIEVAL_MIN_SCORE)
+        chunks = await retrieve(
+            query_embedding,
+            k=config.RETRIEVAL_TOP_K,
+            min_score=config.RETRIEVAL_MIN_SCORE,
+        )
         if chunks:
             context = _format_context(chunks)
     except Exception as exc:
