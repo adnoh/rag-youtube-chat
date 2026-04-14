@@ -65,8 +65,23 @@ BACKEND_PORT: int = 8000
 FRONTEND_PORT: int = 5173
 
 # CORS
-_raw_cors: str = os.environ.get(
-    "CORS_ORIGINS",
-    f"http://localhost:{FRONTEND_PORT},http://127.0.0.1:{FRONTEND_PORT}",
+
+
+def _parse_origins(raw: str) -> list[str]:
+    """Parse a comma-separated string of CORS origins into a list, stripping whitespace."""
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+CORS_ORIGINS: list[str] = _parse_origins(
+    os.environ.get(
+        "CORS_ORIGINS",
+        f"http://localhost:{FRONTEND_PORT},http://127.0.0.1:{FRONTEND_PORT}",
+    )
 )
-CORS_ORIGINS: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()]
+if not CORS_ORIGINS:
+    print(
+        "WARNING: CORS_ORIGINS resolved to an empty list. "
+        "All cross-origin requests will be blocked. "
+        "Check your CORS_ORIGINS environment variable.",
+        file=sys.stderr,
+    )
