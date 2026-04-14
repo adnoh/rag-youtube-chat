@@ -2,6 +2,7 @@
 FastAPI application entry point.
 Handles lifespan startup (DB init + seeding) and route registration.
 """
+
 from contextlib import asynccontextmanager
 import logging
 
@@ -62,6 +63,7 @@ async def health():
     video_count = await repository.count_videos()
     chunk_count = await repository.count_chunks()
     from backend.config import DB_PATH
+
     return {
         "status": "ok",
         "video_count": video_count,
@@ -73,6 +75,7 @@ async def health():
 # ---------------------------------------------------------------------------
 # Sprint 2 SSE test route — verifies streaming format without full RAG
 # ---------------------------------------------------------------------------
+
 
 @app.post("/api/stream-test")
 async def stream_test():

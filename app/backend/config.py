@@ -2,6 +2,7 @@
 Configuration module — loads environment variables from the project-root .env file.
 The path is computed dynamically so it works on any machine.
 """
+
 import sys
 import logging
 from pathlib import Path
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 # The .env file lives 3 levels up (app/ -> workspace/claude/ -> workspace/ ...
 # actually at C:/Users/colem/open-source/adversarial-dev/.env)
 # We traverse parents to find a .env that contains OPENROUTER_API_KEY
+
 
 def _find_and_load_env() -> None:
     """Search parent directories for .env and load it."""
@@ -33,6 +35,7 @@ def _find_and_load_env() -> None:
         logger.info(f"Loaded .env from fallback {fallback}")
     else:
         print("WARNING: No .env file found in parent directories.", file=sys.stderr)
+
 
 _find_and_load_env()
 
