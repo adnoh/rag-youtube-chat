@@ -5,24 +5,16 @@ set SCRIPT_DIR=%~dp0
 set BACKEND_DIR=%SCRIPT_DIR%backend
 set FRONTEND_DIR=%SCRIPT_DIR%frontend
 
-REM ── Python venv ──────────────────────────────────────────────────────────
-set VENV_DIR=%BACKEND_DIR%\.venv
-if not exist "%VENV_DIR%" (
-    echo Creating Python virtual environment...
-    python -m venv "%VENV_DIR%"
-    if errorlevel 1 (
-        echo ERROR: Failed to create Python virtual environment. Is Python installed?
-        exit /b 1
-    )
-)
-
-echo Installing Python dependencies...
-call "%VENV_DIR%\Scripts\activate.bat"
-pip install --quiet -r "%BACKEND_DIR%\requirements.txt"
+REM ── Python deps via uv ──────────────────────────────────────────────────
+echo Installing Python dependencies with uv...
+pushd "%BACKEND_DIR%"
+uv sync --all-extras
 if errorlevel 1 (
-    echo ERROR: Failed to install Python dependencies.
+    echo ERROR: uv sync failed. Is uv installed?
+    popd
     exit /b 1
 )
+popd
 
 REM ── Data directory ────────────────────────────────────────────────────────
 if not exist "%BACKEND_DIR%\data" mkdir "%BACKEND_DIR%\data"
@@ -43,7 +35,7 @@ if not errorlevel 1 (
 ) else (
     echo Starting FastAPI on port 8000...
     cd /d "%SCRIPT_DIR%"
-    start "FastAPI Backend" cmd /c "%VENV_DIR%\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000"
+    start "FastAPI Backend" cmd /c "uv --project %BACKEND_DIR% run uvicorn backend.main:app --reload --port 8000"
     REM Give backend a moment to start
     timeout /t 5 /nobreak >nul
 )

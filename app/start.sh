@@ -5,15 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
 
-# ── Python venv ────────────────────────────────────────────────────────────
-VENV_DIR="$BACKEND_DIR/.venv"
-if [ ! -d "$VENV_DIR" ]; then
-  echo "Creating Python virtual environment…"
-  python -m venv "$VENV_DIR"
-fi
-
-echo "Installing Python dependencies…"
-"$VENV_DIR/bin/pip" install --quiet -r "$BACKEND_DIR/requirements.txt"
+# ── Python deps via uv ─────────────────────────────────────────────────────
+# uv reads backend/pyproject.toml, creates backend/.venv, and installs
+# runtime + optional dev deps.
+echo "Installing Python dependencies with uv…"
+(cd "$BACKEND_DIR" && uv sync --all-extras)
 
 # ── Data directory ─────────────────────────────────────────────────────────
 mkdir -p "$BACKEND_DIR/data"
@@ -44,7 +40,7 @@ if port_in_use 8000; then
 else
   echo "Starting FastAPI on port 8000…"
   cd "$SCRIPT_DIR"
-  "$VENV_DIR/bin/python" -m uvicorn backend.main:app --reload --port 8000 &
+  uv --project "$BACKEND_DIR" run uvicorn backend.main:app --reload --port 8000 &
   BACKEND_PID=$!
   echo "FastAPI started (PID $BACKEND_PID)"
 fi

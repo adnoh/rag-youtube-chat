@@ -16,7 +16,7 @@ This file covers **how the code is written**. For *what* to build, see `MISSION.
 
 **Backend**
 - Python 3.11+ (not specified in any lockfile; don't rely on 3.12+ features)
-- `pip` + `venv` for package management (not uv, not poetry) — `backend/requirements.txt` is the dependency source of truth
+- `uv` for package management (not pip, not poetry) — `backend/pyproject.toml` is the dependency source of truth, `backend/uv.lock` pins exact versions
 - FastAPI with `uvicorn[standard]` ASGI server
 - `aiosqlite` for async SQLite access (no ORM — raw SQL through `db/repository.py`)
 - `docling-core[chunking]` for transcript chunking (HybridChunker)
@@ -50,7 +50,8 @@ rag-youtube-chat/
 │   ├── backend/
 │   │   ├── main.py          # FastAPI app factory, lifespan init, /api/health
 │   │   ├── config.py        # All env var reads + hardcoded constants
-│   │   ├── requirements.txt # pip dependencies (unpinned currently)
+│   │   ├── pyproject.toml   # uv dependencies + tool config (ruff, mypy, pytest)
+│   │   ├── uv.lock          # uv lockfile (committed, pinned versions)
 │   │   ├── data/
 │   │   │   ├── chat.db      # SQLite database (auto-created, gitignored)
 │   │   │   └── seed.py      # 10 mock videos seeded on first startup
@@ -110,15 +111,13 @@ start.bat          # Windows
 Manual backend:
 
 ```bash
-cd app
-python -m venv backend/.venv
-source backend/.venv/bin/activate      # POSIX
-backend\.venv\Scripts\activate         # Windows
-pip install -r backend/requirements.txt
-uvicorn backend.main:app --reload --port 8000
+cd app/backend
+uv sync --all-extras                   # creates backend/.venv, installs runtime + dev deps
+cd ..
+uv --project backend run uvicorn backend.main:app --reload --port 8000
 ```
 
-Backend **must** be run from `app/` (not `app/backend/`) — the `backend.main:app` import path requires it. Running from the wrong cwd gives `ModuleNotFoundError: No module named 'backend'`.
+Backend **must** be run from `app/` (not `app/backend/`) — the `backend.main:app` import path requires it. Running from the wrong cwd gives `ModuleNotFoundError: No module named 'backend'`. The `--project backend` flag tells uv to use `app/backend/.venv` while cwd is `app/`.
 
 Manual frontend:
 
@@ -139,13 +138,15 @@ bun run preview       # serve built assets
 **Python backend:**
 
 ```bash
-cd app
-pip install pytest pytest-asyncio httpx  # add to requirements.txt
-backend/.venv/bin/python -m pytest backend/tests -xvs
+cd app/backend
+uv run pytest tests -xvs
 ```
 
-- Test directory: `app/backend/tests/` (create it when adding the first test)
-- Use `pytest-asyncio` for async tests (`@pytest.mark.asyncio`)
+All backend tool invocations run from `app/backend/` so that `pyproject.toml` (which holds ruff, mypy, pytest config) is picked up. Running the tools from `app/` with `--project backend` works for package resolution but mypy/pytest **do not** auto-discover config from a non-cwd project, so you'd silently lose the exclude lists and asyncio mode.
+
+- Test directory: `app/backend/tests/` (already exists with skeleton `__init__.py` + `conftest.py`)
+- `pytest`, `pytest-asyncio`, and `httpx` are declared in `backend/pyproject.toml` under `[project.optional-dependencies].dev` — installed by `uv sync --all-extras`
+- Use `pytest-asyncio` for async tests (`asyncio_mode = "auto"` is set in `pyproject.toml`, so plain `async def` test functions work)
 - Use `httpx.AsyncClient` against a test FastAPI app for integration tests
 - SQLite tests use a separate temp database; never touch `app/backend/data/chat.db`
 
@@ -165,19 +166,16 @@ bun run test
 
 ## Lint, Format, Type Check
 
-**Current state: no linting/formatting/typechecking configured.** The factory should add these when the first PR touches them. Use:
+**Backend tooling is configured in `app/backend/pyproject.toml`:** ruff (lint + format, line-length 100, target py311, conservative rule set — E/F/W/I/B/UP/SIM/RUF), mypy (lenient `strict = false`, `warn_return_any = true`, `ignore_missing_imports = true`), pytest (asyncio auto mode). All three are in the `dev` optional-dependency group and installed by `uv sync --all-extras`.
 
-**Python:** `ruff` for lint + format, `mypy` for types.
+**Python:**
 
 ```bash
-backend/.venv/bin/python -m ruff check backend
-backend/.venv/bin/python -m ruff format --check backend
-backend/.venv/bin/python -m mypy backend
+cd app/backend
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy .
 ```
-
-Configure in a new `app/backend/pyproject.toml`:
-- `ruff` with line length 100, target `py311`
-- `mypy` with `strict = false` initially, `warn_return_any = true`
 
 **TypeScript:** `eslint` + `prettier` or the combined `biome`. Prefer `biome` (one tool, fast).
 
@@ -191,11 +189,13 @@ bun run tsc --noEmit           # type check
 **Before every commit (what the validator runs):**
 
 ```bash
-# Backend
-backend/.venv/bin/python -m ruff check backend
-backend/.venv/bin/python -m ruff format --check backend
-backend/.venv/bin/python -m mypy backend
-backend/.venv/bin/python -m pytest backend/tests -xvs
+# Backend (from app/backend/)
+cd app/backend
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy .
+uv run pytest tests -xvs
+cd ../..
 
 # Frontend
 cd app/frontend
@@ -290,8 +290,8 @@ NEW_CONSTANT: int = int(os.environ.get("NEW_CONSTANT", "42"))
 These are existing bugs / quirks in the repo. They are fair game for the factory to fix when an issue is filed, but be aware of them so you don't accidentally depend on the broken behavior:
 
 1. **Port mismatch in `vite.config.ts`.** The dev server listens on port 5175 (`vite.config.ts`) but `config.py` reports `FRONTEND_PORT = 5173`. The API proxy target in `vite.config.ts` is also wrong — it points at port 8001 while the backend runs on 8000. If you touch `vite.config.ts` or `config.py`, fix both to agree.
-2. **Backend venv is committed to git.** `app/backend/venv/` should be in `.gitignore` but isn't. Do not remove it in an unrelated PR — file a separate issue. (The factory's implementation rules forbid "improvements" beyond the issue scope.)
-3. **Dependencies are unpinned** in `requirements.txt`. Do not add pins in an unrelated PR. When a dedicated issue authorizes it, pin versions and add a lockfile strategy.
+2. **Backend venv is committed to git.** `app/backend/venv/` should be in `.gitignore` but isn't. Do not remove it in an unrelated PR — file a separate issue. (The factory's implementation rules forbid "improvements" beyond the issue scope.) Note: the new uv-managed venv lives at `app/backend/.venv/` (dotted) and IS gitignored; only the legacy `app/backend/venv/` (no dot) remains checked in and should be cleaned up in a dedicated PR.
+3. **Runtime dependencies are unpinned in `pyproject.toml`** but pinned in `uv.lock`. Do not add upper bounds to `[project].dependencies` in an unrelated PR — uv's lockfile handles reproducibility already.
 4. **No `.env.example`** exists. When authorized, create one listing every variable from `config.py` with placeholder values and comments.
 5. **SSE tokens are JSON-encoded** (wrapped in quotes, escaped newlines). This is non-standard but intentional — it safely handles tokens containing newlines. The parser in `useStreamingResponse.ts` expects this exact format. Do not switch to raw-text SSE without updating both sides.
 

@@ -1,8 +1,0 @@
-fastapi
-uvicorn[standard]
-aiosqlite
-httpx
-python-dotenv
-openai
-docling-core[chunking]
-numpy

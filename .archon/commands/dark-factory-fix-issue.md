@@ -74,24 +74,16 @@ Archon runs this workflow inside a worktree created by the orchestrator. Use tha
 
 ## Phase 4: DEPENDENCIES — DynaChat-specific
 
-DynaChat has a Python backend (pip + venv) and a Bun frontend. Follow `CLAUDE.md` §Running the App exactly.
+DynaChat has a Python backend (uv-managed) and a Bun frontend. Follow `CLAUDE.md` §Running the App exactly.
 
 ### 4.1 Backend deps
 
 ```bash
-# Create venv if missing
-if [ ! -d "app/backend/.venv" ]; then
-  python -m venv app/backend/.venv
-fi
-
-# Install runtime deps (from requirements.txt)
-app/backend/.venv/bin/python -m pip install -r app/backend/requirements.txt
-
-# Install dev deps needed by validate step (ruff, mypy, pytest)
-app/backend/.venv/bin/python -m pip install ruff mypy pytest pytest-asyncio httpx
+# uv reads app/backend/pyproject.toml + uv.lock, creates .venv, installs runtime + dev deps.
+(cd app/backend && uv sync --all-extras)
 ```
 
-If `requirements.txt` was modified by the plan, re-run the install.
+If `pyproject.toml` was modified by the plan, re-run the sync — uv will update `uv.lock` automatically.
 
 ### 4.2 Frontend deps
 
@@ -165,8 +157,10 @@ actually compiles / parses / imports.
 If backend files were touched:
 
 ```bash
-cd app && backend/.venv/bin/python -c "import backend.main"
+cd app && uv --project backend run python -c "import backend.main"
 ```
+
+(This one stays in `app/` because the `backend.main` import path requires `app/` as the package parent — not `app/backend/`.)
 
 If that import fails, read the traceback and fix the root cause.
 

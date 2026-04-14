@@ -61,27 +61,24 @@ Backend validation commands per `CLAUDE.md` §Lint, Format, Type Check and §Tes
 All commands run from the repo root (`C:\Users\colem\OpenSource\rag-youtube-chat\`
 locally, or the worktree equivalent in Archon).
 
-### 2.1 Ensure backend venv exists
+### 2.1 Ensure backend deps are installed
 
 ```bash
-# The worktree copy should already have a venv if FACTORY_RULES.md dep bootstrap
-# was followed. If not, create it:
-if [ ! -d "app/backend/.venv" ]; then
-  python -m venv app/backend/.venv
-  app/backend/.venv/bin/python -m pip install -r app/backend/requirements.txt
-  app/backend/.venv/bin/python -m pip install ruff mypy pytest pytest-asyncio httpx
-fi
+# uv sync is idempotent — fast no-op if .venv is already populated.
+(cd app/backend && uv sync --all-extras)
 ```
+
+All backend tool commands run from `app/backend/` so `pyproject.toml` config (ruff lint rules, mypy exclude list, pytest asyncio mode) is picked up.
 
 ### 2.2 Ruff lint
 
 ```bash
-cd app && backend/.venv/bin/python -m ruff check backend
+cd app/backend && uv run ruff check .
 ```
 
 **If fails:**
-1. Try auto-fix: `backend/.venv/bin/python -m ruff check --fix backend`
-2. Re-run `ruff check backend`
+1. Try auto-fix: `cd app/backend && uv run ruff check --fix .`
+2. Re-run `cd app/backend && uv run ruff check .`
 3. If still failing, manually fix the reported issues
 
 **Record result**: Pass / Fail (fixed)
@@ -89,19 +86,19 @@ cd app && backend/.venv/bin/python -m ruff check backend
 ### 2.3 Ruff format check
 
 ```bash
-cd app && backend/.venv/bin/python -m ruff format --check backend
+cd app/backend && uv run ruff format --check .
 ```
 
 **If fails:**
-1. Auto-fix: `backend/.venv/bin/python -m ruff format backend`
-2. Verify: `backend/.venv/bin/python -m ruff format --check backend`
+1. Auto-fix: `cd app/backend && uv run ruff format .`
+2. Verify: `cd app/backend && uv run ruff format --check .`
 
 **Record result**: Pass / Fail (fixed)
 
 ### 2.4 Mypy type check
 
 ```bash
-cd app && backend/.venv/bin/python -m mypy backend
+cd app/backend && uv run mypy .
 ```
 
 **If fails:**
@@ -114,7 +111,7 @@ cd app && backend/.venv/bin/python -m mypy backend
 ### 2.5 Pytest
 
 ```bash
-cd app && backend/.venv/bin/python -m pytest backend/tests -xvs
+cd app/backend && uv run pytest tests -xvs
 ```
 
 **If `backend/tests/` does not exist:**
