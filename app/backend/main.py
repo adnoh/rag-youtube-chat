@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+from backend.config import CORS_ORIGINS
 from backend.db.schema import init_db
 from backend.data.seed import seed_if_empty
 
@@ -34,7 +35,7 @@ app = FastAPI(title="RAG YouTube Chat API", lifespan=lifespan)
 # Allow the Vite dev server to reach the API during development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
