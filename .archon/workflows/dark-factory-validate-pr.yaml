@@ -726,7 +726,7 @@ nodes:
     context: fresh
 
   - id: synthesize-verdict-pass-2
-    command: dark-factory-synthesize-verdict
+    command: dark-factory-synthesize-verdict-p2
     depends_on:
       - static-checks-backend-p2
       - static-checks-frontend-p2

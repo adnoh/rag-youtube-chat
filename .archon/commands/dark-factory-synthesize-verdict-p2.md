@@ -1,5 +1,5 @@
 ---
-description: Final arbiter for Dark Factory PR validation. Aggregates behavioral, security, code review, and static check results into an approve/request_changes/reject verdict.
+description: Pass-2 variant of dark-factory-synthesize-verdict. Reads -p2 node outputs (post-fix). Aggregates behavioral, security, code review, and static check results into an approve/request_changes/reject verdict.
 argument-hint: (no arguments — reads $static-checks-*, $run-tests-*, $behavioral-validation, $security-check, $code-review, $fetch-base-governance)
 ---
 
@@ -30,25 +30,25 @@ Same rules as the upstream reviewers: you do not read implementation plans, code
 ## Inputs
 
 ### Static Checks — Backend
-$static-checks-backend-p1.output
+$static-checks-backend-p2.output
 
 ### Static Checks — Frontend
-$static-checks-frontend-p1.output
+$static-checks-frontend-p2.output
 
 ### Backend Tests
-$run-tests-backend-p1.output
+$run-tests-backend-p2.output
 
 ### Frontend Tests
-$run-tests-frontend-p1.output
+$run-tests-frontend-p2.output
 
 ### Behavioral Validation (the holdout verdict)
-$behavioral-validation-p1.output
+$behavioral-validation-p2.output
 
 ### Security Check
-$security-check-p1.output
+$security-check-p2.output
 
 ### Code Review
-$code-review-p1.output
+$code-review-p2.output
 
 ### Governance Files (base branch copy — use for context only)
 $fetch-base-governance.output
@@ -110,8 +110,8 @@ Return structured JSON matching the schema enforced by the workflow node:
 - `summary`: one or two sentence plain-English verdict statement (what happened and why)
 - `static_checks_status`: `"pass" | "fail"` — aggregated across all four backend + frontend checks
 - `tests_status`: `"pass" | "fail" | "skipped"`
-- `behavioral_status`: copy of `$behavioral-validation-p1.output.solves_issue`
-- `security_status`: copy of `$security-check-p1.output.verdict`
+- `behavioral_status`: copy of `$behavioral-validation-p2.output.solves_issue`
+- `security_status`: copy of `$security-check-p2.output.verdict`
 - `issues_to_fix`: array of objects, each with:
   - `category`: `"behavioral" | "test_failure" | "static_check" | "code_quality" | "security" | "scope"`
   - `severity`: `"critical" | "high" | "medium" | "low"`
