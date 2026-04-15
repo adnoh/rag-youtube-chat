@@ -200,7 +200,6 @@ The factory stops trying and flags for human attention when:
 - The comprehensive-test workflow fails twice in a row on the same feature area
 - Security check finds critical or high severity issues (the PR itself is rejected; if the underlying issue cannot be implemented safely, escalate the issue)
 - A protected file was modified (the PR is rejected; the issue escalates because it implies the factory misunderstood the scope)
-- Daily spend cap is approached (see section 8)
 
 Escalation means: apply the `factory:needs-human` label, post a comment summarizing why, and stop all factory activity on that issue or PR until a human removes the label.
 
@@ -210,11 +209,11 @@ Escalation means: apply the `factory:needs-human` label, post a comment summariz
 
 ### Hard limits
 
-- **Daily global spend cap: $20/day.** The orchestrator tracks cumulative spend per calendar day and stops dispatching new workflows when the cap is reached. In-flight workflows complete, but no new ones start.
 - **Triage batch size: 10 issues per run.** Larger backlogs take multiple orchestrator cycles.
 - **One workflow at a time.** The orchestrator checks `bun run cli workflow status` before dispatching and exits if anything is running. This is enforced operationally by the cron + status check, not by a separate scheduler.
 - **Fix attempts per PR: maximum 2.** The third cycle escalates.
 - **PR size: 500 lines.** See section 2.
+- **Flood protection.** Non-owner GitHub accounts are capped at 3 issues per UTC calendar day. Excess issues get labeled `factory:rate-limited` and skipped until the next UTC day, when the triage workflow removes the label and re-evaluates them. The repository owner (`coleam00`) is exempt. See section 3.
 
 ### Orchestrator priority order
 
@@ -226,14 +225,6 @@ When the orchestrator runs and nothing is already in flight, it picks exactly on
 4. **Triage last** — any untriaged issues
 
 This ordering ensures in-flight work completes before new work begins. Triage is lowest priority because PRs rot if they sit.
-
-### When spend cap is approaching
-
-When the orchestrator detects daily spend has exceeded 80% of cap, it:
-
-1. Posts a summary comment to the most recent in-flight issue or PR noting the approaching cap
-2. Only runs fix-PR and validate workflows (no new implementations, no new triage)
-3. Stops entirely at 100% of cap
 
 ---
 

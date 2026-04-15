@@ -17,15 +17,86 @@ nodes:
   - id: fetch-issues
     bash: |
       set -euo pipefail
-      # Fetch open issues that have NO factory:* label yet.
-      # Cap at 10 issues per batch, truncate each body to ~2KB so we don't blow context.
+
+      # ════════════════════════════════════════════════════════════
+      # Flood protection (FACTORY_RULES.md §3)
+      # ════════════════════════════════════════════════════════════
+      # Non-owner GitHub accounts are capped at 3 issues per UTC
+      # calendar day. Excess issues are labeled `factory:rate-limited`
+      # and skipped until the next UTC day, when stale labels are
+      # removed and the excess is re-evaluated. The repository owner
+      # (coleam00) is exempt.
+      #
+      # Enforcement happens in three steps before the actual batch
+      # fetch, so the classifier never sees rate-limited issues.
+
+      OWNER="coleam00"
+      DAILY_CAP=3
+      TODAY_UTC=$(date -u '+%Y-%m-%d')
+
+      # ── Step 1: Unstick yesterday's rate-limited issues ─────────
+      # Any open issue labeled factory:rate-limited whose createdAt
+      # is on a prior UTC date gets the label removed so this cycle
+      # re-evaluates it. A fresh triage classification will then
+      # either accept, reject, or re-rate-limit it based on today's
+      # author count.
+      gh issue list --state open --label "factory:rate-limited" --limit 100 \
+        --json number,createdAt \
+        | jq -r --arg today "$TODAY_UTC" '.[] | select((.createdAt | split("T")[0]) < $today) | .number' \
+        | while read -r num; do
+          if [ -n "$num" ]; then
+            gh issue edit "$num" --remove-label "factory:rate-limited" 2>/dev/null || true
+            echo "Unstuck rate-limited issue #$num (created before $TODAY_UTC)" >&2
+          fi
+        done
+
+      # ── Step 2: Count today's issues per non-owner author ───────
+      # Pull all issues (open + closed) created today so we count the
+      # author's full daily footprint, not just what's still open.
+      TODAY_ISSUES=$(gh issue list --state all --limit 200 \
+        --json number,author,createdAt,labels \
+        | jq --arg today "$TODAY_UTC" --arg owner "$OWNER" '
+            [.[] | select(
+              (.createdAt | split("T")[0]) == $today
+              and .author.login != $owner
+            )]
+          ')
+
+      # ── Step 3: Apply factory:rate-limited to over-cap authors ──
+      # For each author with > DAILY_CAP issues today, sort by
+      # createdAt and rate-limit everything past the first DAILY_CAP.
+      # We only add the label if it's not already present, so re-runs
+      # are idempotent.
+      echo "$TODAY_ISSUES" | jq -r --argjson cap "$DAILY_CAP" '
+        group_by(.author.login)
+        | map(select(length > $cap))
+        | .[]
+        | sort_by(.createdAt)
+        | .[$cap:]
+        | .[] | .number
+      ' | while read -r num; do
+        if [ -n "$num" ]; then
+          HAS=$(gh issue view "$num" --json labels --jq '[.labels[].name] | any(. == "factory:rate-limited")' 2>/dev/null || echo "false")
+          if [ "$HAS" != "true" ]; then
+            gh issue edit "$num" --add-label "factory:rate-limited" 2>/dev/null || true
+            gh issue comment "$num" --body "**Dark Factory triage:** rate-limited. Non-owner accounts are capped at ${DAILY_CAP} issues per UTC calendar day to protect the factory from floods. This issue will be re-evaluated on the next triage cycle after UTC midnight." 2>/dev/null || true
+            echo "Rate-limited issue #$num (author over ${DAILY_CAP}/day cap)" >&2
+          fi
+        fi
+      done
+
+      # ════════════════════════════════════════════════════════════
+      # Fetch the actual triage batch
+      # ════════════════════════════════════════════════════════════
+      # Open issues with NO factory:* label (which excludes anything
+      # we just rate-limited). Cap at 10, truncate bodies to ~2KB.
       gh issue list \
         --state open \
         --limit 30 \
         --json number,title,body,author,createdAt,labels \
-        --search "-label:factory:triaging -label:factory:accepted -label:factory:rejected -label:factory:needs-human -label:factory:in-progress" \
+        --search "-label:factory:triaging -label:factory:accepted -label:factory:rejected -label:factory:needs-human -label:factory:in-progress -label:factory:rate-limited" \
         | jq '[.[] | select(([.labels[].name] | any(startswith("factory:"))) | not)] | .[0:10] | map(.body = (.body // "" | .[0:2000]))'
-    timeout: 20000
+    timeout: 60000
 
   - id: fetch-rules
     bash: |
