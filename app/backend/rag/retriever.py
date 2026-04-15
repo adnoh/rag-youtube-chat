@@ -1,20 +1,33 @@
 """
 Cosine similarity retriever — in-process NumPy-based semantic search.
 
-Loads all chunk embeddings from SQLite (via repository), computes cosine
-similarity against a query embedding, and returns the top-K most relevant
-chunks with their video metadata.
+Loads all chunk embeddings from SQLite (via repository) on first use and on
+cache invalidation, then caches the result in memory for subsequent calls.
+Computes cosine similarity against a query embedding and returns the top-K most
+relevant chunks with their video metadata.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 
 from backend.db import repository
 
 logger = logging.getLogger(__name__)
+
+# Module-level embedding cache.  Set to None whenever new chunks are ingested.
+_cache: list[dict[str, Any]] | None = None
+
+
+def invalidate_cache() -> None:
+    """Discard the cached chunk list so the next retrieve() reloads from DB."""
+    global _cache
+    evicted = len(_cache) if _cache else 0
+    _cache = None
+    logger.info("Embedding cache invalidated (%d chunks evicted).", evicted)
 
 
 async def retrieve(
@@ -37,8 +50,14 @@ async def retrieve(
           - score: float (cosine similarity, -1.0 to 1.0)
         Sorted by score descending. Returns [] if the DB has no chunks.
     """
-    # Load all chunks from the DB (includes deserialized embeddings)
-    all_chunks = await repository.list_chunks()
+    # Load all chunks from the DB (or reuse cache if already populated)
+    global _cache
+    if _cache is None:
+        logger.debug("Cache miss — loading embeddings from DB.")
+        _cache = await repository.list_chunks()
+    else:
+        logger.debug("Cache hit: %d chunks", len(_cache))
+    all_chunks = _cache
     if not all_chunks:
         return []
 
@@ -111,6 +130,4 @@ def _cosine_similarity_batch(
     matrix_normalized = matrix / matrix_norms
 
     # Dot product of normalized vectors = cosine similarity
-    similarities = matrix_normalized @ query_normalized  # shape: (N,)
-    result: np.ndarray = similarities.astype(np.float32)
-    return result
+    return (matrix_normalized @ query_normalized).astype(np.float32)  # shape: (N,)
