@@ -910,21 +910,13 @@ nodes:
       # the PR OPEN with factory:needs-human so a human can investigate
       # the underlying validator failure.
       if [ ! -s "$VERDICT_FILE" ] || ! jq -e '.verdict' "$VERDICT_FILE" > /dev/null 2>&1; then
-        echo "WARN: verdict file ($VERDICT_FILE) is empty or unparseable — emitting fallback reject+escalate" >&2
-        cat > "$VERDICT_FILE" <<'__FALLBACK_VERDICT_EOF__'
-      {
-        "verdict": "reject",
-        "summary": "Validator infrastructure failed — no synthesizer output available. Manual investigation required.",
-        "static_checks_status": "fail",
-        "tests_status": "fail",
-        "behavioral_status": "no",
-        "security_status": "fail",
-        "issues_to_fix": [],
-        "should_escalate": true,
-        "escalation_reason": "Upstream node (checkout-pr, start-app, or synthesize-verdict) failed and produced no verdict. Validator cannot render a substantive decision; human must investigate the broken run.",
-        "reasoning": "Fallback verdict emitted by apply-verdict because the selected verdict file was empty or unparseable JSON. This indicates an upstream infrastructure failure, not a defect in the PR under review."
-      }
-      __FALLBACK_VERDICT_EOF__
+        echo "WARN: verdict file ($VERDICT_FILE) is empty or unparseable - emitting fallback reject+escalate" >&2
+        # Single-line printf (not heredoc) on purpose. Archon spawns this
+        # node via bash -c "$payload" on Windows, and multi-line heredocs
+        # with non-tabbed end markers fail to match their delimiter across
+        # that serialization boundary (discovered empirically — the P1/P2
+        # heredocs above work because their substituted bodies are one line).
+        printf '%s\n' '{"verdict":"reject","summary":"Validator infrastructure failed - no synthesizer output available. Manual investigation required.","static_checks_status":"fail","tests_status":"fail","behavioral_status":"no","security_status":"fail","issues_to_fix":[],"should_escalate":true,"escalation_reason":"Upstream node (checkout-pr, start-app, or synthesize-verdict) failed and produced no verdict. Validator cannot render a substantive decision; human must investigate the broken run.","reasoning":"Fallback verdict emitted by apply-verdict because the selected verdict file was empty or unparseable JSON. This indicates an upstream infrastructure failure, not a defect in the PR under review."}' > "$VERDICT_FILE"
       fi
 
       cp "$VERDICT_FILE" "$ARTIFACTS_DIR/verdict.json"
