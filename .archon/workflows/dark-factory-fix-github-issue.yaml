@@ -135,26 +135,28 @@ nodes:
     depends_on: [validate]
     context: fresh
 
-  # Deterministic fallback: if the AI did not write .pr-number, extract it
-  # from the current branch. This fixes #13 where review-scope received the
-  # issue number instead of the PR number.
+  # Deterministic PR number capture: reads .pr-number if the AI wrote it,
+  # otherwise extracts via gh pr view. Outputs ONLY the number so
+  # downstream nodes can use $capture-pr-number.output as the PR ref.
+  # This fixes #13 where review-scope received the issue number instead.
   - id: capture-pr-number
     bash: |
       set -euo pipefail
       if [ -f "$ARTIFACTS_DIR/.pr-number" ]; then
-        PR=$(cat "$ARTIFACTS_DIR/.pr-number" | tr -d ' \n')
+        PR=$(cat "$ARTIFACTS_DIR/.pr-number" | tr -d ' \n\r')
         if echo "$PR" | grep -qE '^[0-9]+$'; then
-          echo "PR number already captured: $PR"
+          echo "$PR"
           exit 0
         fi
       fi
       PR=$(gh pr view --json number -q '.number' 2>/dev/null || true)
-      if [ -z "$PR" ]; then
-        echo "WARNING: could not determine PR number from current branch" >&2
-        exit 0
+      if [ -n "$PR" ]; then
+        echo "$PR" > "$ARTIFACTS_DIR/.pr-number"
+        echo "$PR"
+      else
+        echo "WARNING: could not determine PR number" >&2
+        echo "0"
       fi
-      echo "$PR" > "$ARTIFACTS_DIR/.pr-number"
-      echo "Captured PR number: $PR"
     depends_on: [create-pr]
     timeout: 15000
 
@@ -163,7 +165,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: review-scope
-    command: archon-pr-review-scope
+    command: dark-factory-pr-review-scope
     depends_on: [capture-pr-number]
     context: fresh
 
