@@ -1,0 +1,17 @@
+{
+    email cole@dynamous.ai
+}
+
+chat.dynamous.ai {
+    encode zstd gzip
+
+    # Backend API
+    handle /api/* {
+        reverse_proxy host.docker.internal:8000
+    }
+
+    # Frontend (Vite dev for now; swap to static build once app has Dockerfile)
+    handle {
+        reverse_proxy host.docker.internal:5173
+    }
+}
