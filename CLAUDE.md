@@ -382,16 +382,39 @@ When a factory workflow runs integration tests that need real-shaped data, it so
 3. **The refresh is managed by systemd** (`dynachat-factory-snapshot.timer` on the VPS). The factory should not invoke it — if a fresher snapshot is needed, ask a human to `sudo systemctl start dynachat-factory-snapshot.service`.
 4. **Unit tests still use fixtures** — see "Testing external APIs" above. The snapshot DB is for the integration tier only, where volume matters.
 
-### Redeploy flow
+### Redeploy flow — blue/green, automatic
 
-After a merge to `main` on prod, the deploy is (for now) manual:
+Deploy is pull-based and **fully automated**. On the prod VPS, a systemd timer (`dynachat-deploy.timer`) runs `/opt/dynachat/deploy.sh` every 10 minutes. The script:
 
-```bash
-ssh archon@<factory-vps>
-sudo -u root bash -c 'cd /opt/dynachat/app && git pull && cd deploy && docker compose --env-file /opt/dynachat/.env up -d'
-```
+1. `git fetch`es `/opt/dynachat/app`; if `HEAD == origin/main`, no-op
+2. Otherwise `git pull`, then blue/green swap:
+   - Reads active color from `deploy/upstream.conf` (content: `reverse_proxy app-blue:8000` or `app-green:8000`)
+   - Builds + starts the **inactive** color (`docker compose up -d --build --no-deps app-<inactive>`)
+   - Polls `docker inspect ... Health.Status` for up to 90s
+   - If inactive never goes healthy: abort, stop the failed container, keep active serving. Deploy fails loudly in the systemd journal.
+   - If healthy: rewrite `upstream.conf`, `docker compose exec caddy caddy reload` (Caddy reload is graceful — no dropped connections), sleep 5s (drain), stop the old color
 
-A full CI/CD path (webhook → pull → compose up) is in the backlog. Until then, the factory's job ends at merging a green PR; actual rollout is a human step.
+The factory's contract with prod is narrow: **merge a green PR to main, the VPS handles rollout within 10 minutes.** There is no CI deploy step, no webhook, no GitHub Action.
+
+### What the factory must never do
+
+The deploy infrastructure (`/opt/dynachat/deploy.sh`, `/etc/systemd/system/dynachat-deploy.*`, `/opt/dynachat/.env`, `/var/log/dynachat-deploy.log`) is **not in this repo** and must not be touched by the factory. If an issue seems to require editing systemd, cron, secrets, or the deploy script itself, that's a sign the issue is scoped wrong — file a clarification rather than inventing deploy infra inside the repo.
+
+The factory's lane, summarized:
+- **Inside the repo, inside the PR** → fair game (code, tests, docs, `deploy/Dockerfile`, `deploy/docker-compose.yml`, `deploy/Caddyfile`, `deploy/upstream.conf`)
+- **Outside the repo** → off-limits (VPS state, secrets, systemd units, server processes)
+
+### Zero-downtime is a hard requirement
+
+Production must never 502 during a deploy. That's why blue/green exists. Any change to `deploy/` must preserve this property:
+
+- Both `app-blue` and `app-green` services must be defined in `docker-compose.yml` with identical config except for `container_name`
+- Each must have a `HEALTHCHECK` that only succeeds when the app is ready to serve traffic (not just "process started")
+- Neither publishes its port to the host — Caddy reaches them via the internal docker network by service name
+- `deploy/upstream.conf` is the single source of truth for which color is live. The deploy script rewrites it; the committed version should pin `app-blue`.
+- `Caddyfile` must contain `import /etc/caddy/upstream.conf` (and the caddy service must mount that file read-only)
+
+If a PR breaks any of the above, the deploy script will either refuse to swap (bad) or swap to an unhealthy container (very bad). Validate locally with `docker compose --env-file /opt/dynachat/.env -f deploy/docker-compose.yml config` before requesting review.
 
 ---
 
