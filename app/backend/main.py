@@ -29,9 +29,14 @@ async def lifespan(app: FastAPI):
     """Startup: run Alembic migrations, init Postgres pool, then seed if empty."""
     logger.info("Starting up — running Alembic migrations…")
 
-    # Run alembic upgrade head (using the checked-in script_location path)
+    # Run alembic upgrade head. alembic.ini lives at app/backend/alembic.ini
+    # and its script_location ("backend/alembic") is resolved relative to the
+    # working directory — which must be the parent of backend/ (i.e. /app in
+    # the container, or app/ in the repo). Force cwd so behaviour is the same
+    # regardless of where uvicorn was started from.
     backend_dir = Path(__file__).resolve().parent
-    alembic_cfg = backend_dir.parent / "alembic.ini"
+    alembic_cfg = backend_dir / "alembic.ini"
+    alembic_cwd = backend_dir.parent
     result = subprocess.run(
         [
             "uv",
@@ -44,10 +49,17 @@ async def lifespan(app: FastAPI):
         ],
         capture_output=True,
         text=True,
+        cwd=str(alembic_cwd),
     )
     if result.returncode != 0:
-        logger.error(f"Alembic migration failed: {result.stderr}")
-        raise RuntimeError(f"Alembic upgrade head failed: {result.stderr}")
+        logger.error(
+            "Alembic migration failed. stdout=%s stderr=%s",
+            result.stdout,
+            result.stderr,
+        )
+        raise RuntimeError(
+            f"Alembic upgrade head failed: stdout={result.stdout} stderr={result.stderr}"
+        )
     logger.info("Alembic migrations applied.")
 
     # Initialise the Postgres pool (used by all repository calls)
