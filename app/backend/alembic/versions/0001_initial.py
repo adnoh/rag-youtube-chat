@@ -26,7 +26,7 @@ def upgrade() -> None:
     # UUIDs via gen_random_uuid() for new Postgres-native tables.
     op.execute(
         """
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             email CITEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
@@ -42,7 +42,7 @@ def upgrade() -> None:
     # --- user_messages (sliding-window audit for 25 msg/user/24h cap) ---
     op.execute(
         """
-        CREATE TABLE user_messages (
+        CREATE TABLE IF NOT EXISTS user_messages (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -57,7 +57,7 @@ def upgrade() -> None:
     # --- signup_attempts (audit trail for signup rate-limiting) ---
     op.execute(
         """
-        CREATE TABLE signup_attempts (
+        CREATE TABLE IF NOT EXISTS signup_attempts (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             ip INET NOT NULL,
             email_attempted CITEXT,
@@ -80,7 +80,7 @@ def upgrade() -> None:
     # --- videos ----------------------------------------------------------
     op.execute(
         """
-        CREATE TABLE videos (
+        CREATE TABLE IF NOT EXISTS videos (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             description TEXT NOT NULL,
@@ -94,7 +94,7 @@ def upgrade() -> None:
     # --- chunks ---------------------------------------------------------
     op.execute(
         """
-        CREATE TABLE chunks (
+        CREATE TABLE IF NOT EXISTS chunks (
             id TEXT PRIMARY KEY,
             video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
             content TEXT NOT NULL,
@@ -113,7 +113,7 @@ def upgrade() -> None:
     # which uses string user IDs. No FK constraint here.
     op.execute(
         """
-        CREATE TABLE conversations (
+        CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             title TEXT NOT NULL DEFAULT 'New Conversation',
@@ -127,7 +127,7 @@ def upgrade() -> None:
     # --- messages --------------------------------------------------------
     op.execute(
         """
-        CREATE TABLE messages (
+        CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
             role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
@@ -140,7 +140,7 @@ def upgrade() -> None:
     # --- channel_sync_runs -----------------------------------------------
     op.execute(
         """
-        CREATE TABLE channel_sync_runs (
+        CREATE TABLE IF NOT EXISTS channel_sync_runs (
             id TEXT PRIMARY KEY,
             status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
             videos_total INTEGER NOT NULL DEFAULT 0,
@@ -155,7 +155,7 @@ def upgrade() -> None:
     # --- channel_sync_videos --------------------------------------------
     op.execute(
         """
-        CREATE TABLE channel_sync_videos (
+        CREATE TABLE IF NOT EXISTS channel_sync_videos (
             id TEXT PRIMARY KEY,
             sync_run_id TEXT NOT NULL REFERENCES channel_sync_runs(id) ON DELETE CASCADE,
             youtube_video_id TEXT NOT NULL,
