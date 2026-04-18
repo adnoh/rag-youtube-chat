@@ -14,8 +14,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 # Set auth-related env vars BEFORE any backend import so config.py picks them up.
-os.environ.setdefault("JWT_SECRET", "test-secret-please-do-not-use-in-prod")
-os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+os.environ["JWT_SECRET"] = "test-secret-please-do-not-use-in-prod"
+os.environ["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+os.environ["SUPADATA_API_KEY"] = "test-supadata-key"
+os.environ["YOUTUBE_CHANNEL_ID"] = "UC_testchannel"
+os.environ["CHANNEL_SYNC_TYPE"] = "video"
 
 import pytest
 
@@ -73,9 +76,7 @@ def patch_rate_limit(monkeypatch, message_store):
         resets_at: datetime | None = None
         if in_window:
             resets_at = min(in_window) + timedelta(hours=rate_limit.WINDOW_HOURS)
-        return rate_limit.RateLimitStatus(
-            used=used, remaining=remaining, resets_at=resets_at
-        )
+        return rate_limit.RateLimitStatus(used=used, remaining=remaining, resets_at=resets_at)
 
     monkeypatch.setattr(rate_limit, "check_and_record", fake_check_and_record)
     monkeypatch.setattr(rate_limit, "get_status", fake_get_status)
