@@ -72,11 +72,16 @@ def _now() -> datetime:
 
 
 @router.post("/channels/sync", response_model=SyncResponse)
-async def sync_channel() -> SyncResponse:
+async def sync_channel(limit: int | None = None) -> SyncResponse:
     """
-    Enumerate all videos from the configured YouTube channel via Supadata,
+    Enumerate videos from the configured YouTube channel via Supadata,
     ingest any new videos (idempotent by youtube_video_id), and record a
     channel_sync_runs row with per-video status.
+
+    Query params:
+        limit: Max number of videos to process. Omit for full channel.
+               Supadata returns videos newest-first, so limit=20 processes
+               the 20 most recent videos.
 
     This is a synchronous, sequential operation — all videos are processed
     before the HTTP response is returned. The caller (e.g. systemd timer)
@@ -101,11 +106,14 @@ async def sync_channel() -> SyncResponse:
     # Create sync run record
     await repo.create_sync_run(sync_run_id=sync_run_id, started_at=started_at)
 
-    # Enumerate channel videos from Supadata
+    # Enumerate channel videos from Supadata. Pass limit through so we don't
+    # pull 5000 IDs when the caller only wants 20.
+    supadata_limit = limit if limit and limit > 0 else 5000
     try:
         channel_videos = await supadata.get_channel_video_ids(
             channel_id=YOUTUBE_CHANNEL_ID,
             type=CHANNEL_SYNC_TYPE,
+            limit=supadata_limit,
         )
     except Exception as exc:
         logger.error("Failed to enumerate channel videos: %s", exc)
@@ -125,6 +133,10 @@ async def sync_channel() -> SyncResponse:
     all_video_ids = (
         channel_videos["video_ids"] + channel_videos["short_ids"] + channel_videos["live_ids"]
     )
+    # Extra safety clamp in case Supadata returned more than requested across
+    # the three buckets (e.g. type='all').
+    if limit and limit > 0:
+        all_video_ids = all_video_ids[:limit]
     videos_total = len(all_video_ids)
     videos_new = 0
     videos_error = 0
