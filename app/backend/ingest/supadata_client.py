@@ -19,6 +19,8 @@ from typing import Any
 import httpx
 
 from backend.config import SUPADATA_API_KEY
+from backend.ingest.youtube_url import parse_youtube_url
+from backend.services.youtube_meta import get_video_title
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ class SupadataClient:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
                 headers={
-                    "Authorization": f"Bearer {SUPADATA_API_KEY}",
+                    "x-api-key": SUPADATA_API_KEY,
                     "Accept": "application/json",
                 },
                 timeout=httpx.Timeout(30.0, connect=10.0),
@@ -99,7 +101,7 @@ class SupadataClient:
 
                 if response.status_code == 200:
                     data = response.json()
-                    return self._normalize(data)
+                    return await self._normalize(data, url)
 
                 if response.status_code == 429:
                     retry_after = response.headers.get("retry-after")
@@ -131,7 +133,7 @@ class SupadataClient:
                         )
                         response = await _do_request("en")
                         if response.status_code == 200:
-                            return self._normalize(response.json())
+                            return await self._normalize(response.json(), url)
                     raise SupadataError(
                         f"Supadata returned 500 Internal Server Error: {response.text}"
                     )
@@ -179,39 +181,49 @@ class SupadataClient:
         # Should not reach here, but satisfy mypy/pytest
         raise SupadataError(f"Supadata request exhausted all retries for '{url}'") from last_exc
 
-    def _normalize(self, data: dict[str, Any]) -> dict[str, Any]:
+    async def _normalize(self, data: dict[str, Any], url: str) -> dict[str, Any]:
         """
-        Normalize the Supadata API response into the canonical dict shape.
+        Normalize the Supadata /v1/youtube/transcript response.
 
-        Supadata returns different field names depending on the endpoint.
-        This method abstracts that so callers get a consistent output.
+        The endpoint returns `content` as either a plain string or a list of
+        {lang, text, offset, duration} segments where offset/duration are in
+        milliseconds. Title/description are NOT returned by this endpoint —
+        we fetch the title via the public YouTube oEmbed endpoint and use a
+        placeholder description so the existing {title, description,
+        transcript, segments} contract is preserved for callers.
         """
-        # Most Supadata responses contain a nested "video" or "data" object.
-        # Adapt as needed based on actual API shape; these fields are typical.
-        video = data.get("video", data.get("data", data))
+        content = data.get("content")
 
-        title = video.get("title", "")
-        description = video.get("description", "")
-
-        # Transcript segments: may be under "transcript", "segments", or "caption"
-        raw_segments: list[dict[str, Any]] = (
-            video.get("transcript") or video.get("segments") or video.get("caption") or []
-        )
-
-        # Build concatenated full-text transcript
-        transcript_parts: list[str] = []
         segments: list[dict[str, Any]] = []
-        for seg in raw_segments:
-            text = seg.get("text", seg.get("content", ""))
-            start = seg.get("start_seconds", seg.get("start", 0.0))
-            transcript_parts.append(text)
-            segments.append({"text": text, "start_seconds": start})
+        if isinstance(content, str):
+            transcript = content
+        elif isinstance(content, list):
+            transcript_parts: list[str] = []
+            for seg in content:
+                text = seg.get("text", "")
+                offset_ms = seg.get("offset", 0)
+                duration_ms = seg.get("duration", 0)
+                start_s = float(offset_ms) / 1000.0
+                end_s = start_s + float(duration_ms) / 1000.0
+                transcript_parts.append(text)
+                segments.append({"text": text, "start": start_s, "end": end_s})
+            transcript = " ".join(transcript_parts)
+        else:
+            transcript = ""
 
-        transcript = " ".join(transcript_parts)
+        # Title: Supadata's transcript endpoint doesn't include it; grab via oEmbed.
+        title = ""
+        try:
+            parsed = parse_youtube_url(url)
+            fetched = await get_video_title(parsed.video_id)
+            title = fetched if fetched else f"Video {parsed.video_id}"
+        except Exception as exc:  # parse failure shouldn't break ingest
+            logger.warning("Could not derive title for '%s': %s", url, exc)
+            title = "Untitled Video"
 
         return {
             "title": title,
-            "description": description,
+            "description": f"Ingested from {url}",
             "transcript": transcript,
             "segments": segments,
         }

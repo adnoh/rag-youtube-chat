@@ -20,7 +20,7 @@ from backend.ingest.youtube_url import parse_youtube_url
 from backend.main import app
 
 # ---------------------------------------------------------------------------
-# Auth + cache fixtures
+# Auth + title-fetch fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -30,6 +30,29 @@ def bypass_auth():
     app.dependency_overrides[get_current_user] = lambda: {"id": "test-user", "email": "t@t"}
     yield
     app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture(autouse=True)
+def mock_oembed_title():
+    """Stub the oEmbed title lookup so tests don't hit YouTube."""
+    with patch(
+        "backend.ingest.supadata_client.get_video_title",
+        new=AsyncMock(return_value="Supadata Title"),
+    ):
+        yield
+
+
+# Real Supadata /v1/youtube/transcript response shape — list mode.
+def _content_response(parts: list[tuple[str, int, int]]) -> dict:
+    """Build a response with content=[{text, offset, duration}, ...]."""
+    return {
+        "lang": "en",
+        "availableLangs": ["en"],
+        "content": [
+            {"lang": "en", "text": text, "offset": offset, "duration": duration}
+            for (text, offset, duration) in parts
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -79,17 +102,13 @@ def test_parse_youtube_url_invalid(url):
 
 @pytest.mark.asyncio
 async def test_client_fetch_transcript_happy_path():
-    """Supadata returns 200 → response is normalized correctly."""
-    happy_response = {
-        "video": {
-            "title": "Test Video",
-            "description": "A test description.",
-            "transcript": [
-                {"text": "Hello world.", "start_seconds": 0.0},
-                {"text": "This is a test.", "start_seconds": 3.5},
-            ],
-        }
-    }
+    """Supadata returns 200 → content segments are normalized correctly."""
+    happy_response = _content_response(
+        [
+            ("Hello world.", 0, 3000),
+            ("This is a test.", 3500, 2500),
+        ]
+    )
 
     with respx.mock:
         respx.get("https://api.supadata.ai/v1/youtube/transcript").mock(
@@ -103,11 +122,38 @@ async def test_client_fetch_transcript_happy_path():
         )
         await client.close()
 
-    assert result["title"] == "Test Video"
-    assert result["description"] == "A test description."
+    assert result["title"] == "Supadata Title"  # from mocked oEmbed
     assert "Hello world." in result["transcript"]
+    assert "This is a test." in result["transcript"]
     assert result["segments"][0]["text"] == "Hello world."
-    assert result["segments"][0]["start_seconds"] == 0.0
+    assert result["segments"][0]["start"] == 0.0
+    assert result["segments"][0]["end"] == 3.0
+    assert result["segments"][1]["start"] == 3.5
+
+
+@pytest.mark.asyncio
+async def test_client_fetch_transcript_content_as_plain_string():
+    """Supadata text mode returns content as a plain string."""
+    plain_response = {
+        "lang": "en",
+        "availableLangs": ["en"],
+        "content": "The whole transcript as one string.",
+    }
+
+    with respx.mock:
+        respx.get("https://api.supadata.ai/v1/youtube/transcript").mock(
+            return_value=Response(200, json=plain_response),
+        )
+
+        client = SupadataClient()
+        result = await client.fetch_transcript(
+            "https://www.youtube.com/watch?v=abc123",
+            lang="en",
+        )
+        await client.close()
+
+    assert result["transcript"] == "The whole transcript as one string."
+    assert result["segments"] == []
 
 
 @pytest.mark.asyncio
@@ -134,14 +180,7 @@ async def test_client_fetch_transcript_rate_limit_429():
 @pytest.mark.asyncio
 async def test_client_fetch_transcript_500_without_lang_retries():
     """500 without lang → retries with lang='en' → succeeds."""
-    # First call (no lang or wrong lang) returns 500, second call with lang="en" succeeds
-    happy_response = {
-        "video": {
-            "title": "Test Video",
-            "description": "Description",
-            "transcript": [{"text": "Hello.", "start_seconds": 0.0}],
-        }
-    }
+    happy_response = _content_response([("Hello.", 0, 1000)])
 
     call_count = 0
 
@@ -165,7 +204,8 @@ async def test_client_fetch_transcript_500_without_lang_retries():
         )
         await client.close()
 
-    assert result["title"] == "Test Video"
+    assert result["title"] == "Supadata Title"
+    assert "Hello." in result["transcript"]
 
 
 # ---------------------------------------------------------------------------
@@ -184,16 +224,12 @@ async def test_ingest_from_url_happy_path():
     }
     mock_embedding = [[0.1, 0.2, 0.3]]
 
-    supadata_response = {
-        "video": {
-            "title": "Supadata Title",
-            "description": "Supadata Desc",
-            "transcript": [
-                {"text": "Hello world.", "start_seconds": 0.0},
-                {"text": "This is a test.", "start_seconds": 3.5},
-            ],
-        }
-    }
+    supadata_response = _content_response(
+        [
+            ("Hello world.", 0, 3000),
+            ("This is a test.", 3500, 2500),
+        ]
+    )
 
     with (
         respx.mock,
@@ -274,13 +310,7 @@ async def test_ingest_from_url_empty_chunks_returns_stored_no_chunks():
         "transcript": "",
     }
 
-    supadata_response = {
-        "video": {
-            "title": "Empty Video",
-            "description": "No content",
-            "transcript": [],
-        }
-    }
+    supadata_response = _content_response([])
 
     with (
         respx.mock,
