@@ -28,10 +28,10 @@ from backend.config import SUPADATA_API_KEY, YOUTUBE_CHANNEL_ID
 from backend.db import repository as repo
 from backend.ingest.youtube_url import parse_youtube_url
 from backend.rag import retriever
-from backend.rag.chunker import chunk_video
+from backend.rag.chunker import chunk_video_fallback, chunk_video_timestamped
 from backend.rag.embeddings import embed_batch
 from backend.routes.channels import sync_channel as _sync_channel_impl
-from backend.services.video_ingest import fetch_video_for_ingest
+from backend.services.video_ingest import VideoIngestError, fetch_video_for_ingest
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,8 @@ async def _fetch_chunks_and_embeddings(url_str: str) -> tuple[dict, list[dict]]:
 
     try:
         supadata_data = await fetch_video_for_ingest(url_str, lang="en")
+    except VideoIngestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SupadataError as exc:
         logger.error("Supadata fetch failed for '%s': %s", url_str, exc)
         raise HTTPException(status_code=503, detail=f"Transcript fetch failed: {exc}") from exc
@@ -95,14 +97,24 @@ async def _fetch_chunks_and_embeddings(url_str: str) -> tuple[dict, list[dict]]:
     description = supadata_data["description"]
     transcript = supadata_data["transcript"]
     youtube_video_id = supadata_data["youtube_video_id"]
+    segments = supadata_data.get("segments", [])
 
-    chunk_texts: list[str] = chunk_video({"title": title, "transcript": transcript})
-    if not chunk_texts:
+    if segments:
+        chunk_dicts: list[dict]
+        chunk_dicts, had_errors = chunk_video_timestamped(segments)
+        if had_errors:
+            logger.warning("Chunker fell back to raw text for some segments for '%s'", url_str)
+    else:
+        chunk_dicts, had_errors = chunk_video_fallback({"title": title, "transcript": transcript})
+        if had_errors:
+            logger.warning("Chunker returned 0 chunks for '%s' — transcript may be empty", url_str)
+    if not chunk_dicts:
         raise HTTPException(
             status_code=422,
             detail="Chunker returned 0 chunks — transcript may be empty or malformed.",
         )
 
+    chunk_texts = [c["content"] for c in chunk_dicts]
     try:
         embeddings = embed_batch(chunk_texts)
     except Exception as exc:
@@ -117,8 +129,15 @@ async def _fetch_chunks_and_embeddings(url_str: str) -> tuple[dict, list[dict]]:
         )
 
     chunks = [
-        {"content": text, "embedding": embedding, "chunk_index": idx}
-        for idx, (text, embedding) in enumerate(zip(chunk_texts, embeddings, strict=False))
+        {
+            "content": chunk["content"],
+            "embedding": embedding,
+            "chunk_index": idx,
+            "start_seconds": chunk["start_seconds"],
+            "end_seconds": chunk["end_seconds"],
+            "snippet": chunk["snippet"],
+        }
+        for idx, (chunk, embedding) in enumerate(zip(chunk_dicts, embeddings, strict=False))
     ]
     metadata = {
         "title": title,
