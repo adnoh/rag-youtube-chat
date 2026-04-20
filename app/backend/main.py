@@ -13,11 +13,10 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.auth.dependencies import get_current_admin, get_current_user
-from backend.config import CORS_ORIGINS
+from backend.config import CORS_ORIGINS, FRONTEND_DIST
 from backend.data.seed import seed_if_empty
 from backend.db.postgres import close_pg_pool, init_pg_pool
 
@@ -157,12 +156,51 @@ async def stream_test():
 
 
 # ---------------------------------------------------------------------------
-# Frontend static assets (production only — Vite serves them in dev)
+# Frontend static assets / SPA catch-all
 #
-# When FRONTEND_DIST env var points at a built `dist/`, mount it at `/` so
-# FastAPI serves index.html + hashed JS/CSS from the same origin as `/api/*`.
-# This mount is registered LAST so the `/api/*` routes above take precedence.
+# When FRONTEND_DIST env var points at a built `dist/`, serve static files
+# from it and fall back to index.html for any path that isn't an API route.
+# In dev (FRONTEND_DIST unset), Caddy proxies / to Vite on 5173, so this
+# block is never reached — but the catch-all is harmless in that case.
 # ---------------------------------------------------------------------------
-_frontend_dist = os.environ.get("FRONTEND_DIST", "")
-if _frontend_dist and Path(_frontend_dist).is_dir():
-    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
+@app.get("/", include_in_schema=False)
+async def serve_root():
+    """Serve index.html for the root path (/) which doesn't match /{path:path})."""
+    index_path = Path(FRONTEND_DIST) / "index.html" if FRONTEND_DIST else Path("index.html")
+    if not index_path.exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"index.html not found. FRONTEND_DIST={FRONTEND_DIST!r}, cwd={os.getcwd()}. "
+            "Set FRONTEND_DIST environment variable or ensure index.html exists at current directory.",
+        )
+    return FileResponse(str(index_path))
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def serve_spa_or_static(path: str):
+    """Serve index.html for any non-API path (SPA catch-all).
+
+    When FRONTEND_DIST is set, also serve actual static files (JS/CSS/assets)
+    from that directory so hashed build artifacts are served correctly.
+    """
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(status_code=404)
+
+    if FRONTEND_DIST:
+        try:
+            dist_dir = Path(FRONTEND_DIST).resolve()
+            requested_path = (dist_dir / path).resolve()
+            # Guard against path traversal (e.g. path=../../etc/passwd)
+            if not requested_path.is_relative_to(dist_dir):
+                raise HTTPException(status_code=404)
+            if requested_path.is_file():
+                return FileResponse(str(requested_path))
+        except OSError as exc:
+            logger.error("Static file error for path=%s frontend_dist=%s: %s", path, FRONTEND_DIST, exc)
+            raise HTTPException(status_code=500, detail="Static file error") from exc
+
+    index_path = Path(FRONTEND_DIST) / "index.html" if FRONTEND_DIST else Path("index.html")
+    if not index_path.exists():
+        # Pre-fix behavior: 404 JSON for unknown non-API paths when FRONTEND_DIST is unset
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(str(index_path))
