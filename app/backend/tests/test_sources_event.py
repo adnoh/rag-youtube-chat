@@ -1,115 +1,12 @@
 """
 Tests for the SSE sources event format helpers.
 
-Verifies:
-  - _format_context includes timestamp markers (mm:ss) in the context block
-  - Citation objects have all required keys for the SSE sources event
-
-The SSE event emission itself is tested via integration tests in test_ingest_cache_invalidation.py
-which validate the full streaming stack against mocked dependencies.
+The context formatter used to live in routes/messages.py as `_format_context`.
+Retrieval is now tool-driven and the equivalent formatter lives in
+backend.rag.tools as `_format_search_results` — its behavior is covered in
+test_tools.py. This file now only covers citation-object shape, SSE format,
+and persistence round-trip.
 """
-
-from backend.routes.messages import _format_context
-
-
-class TestFormatContext:
-    """Tests for _format_context timestamp formatting."""
-
-    def test_includes_video_title(self) -> None:
-        """Context block contains the video title."""
-        chunks = [
-            {
-                "chunk_id": "c1",
-                "content": "Test content",
-                "video_id": "v1",
-                "video_title": "My Video",
-                "video_url": "https://youtube.com/watch?v=abc",
-                "start_seconds": 0.0,
-                "end_seconds": 10.0,
-                "snippet": "Test snippet",
-                "score": 0.9,
-            }
-        ]
-        ctx = _format_context(chunks)
-        assert "My Video" in ctx
-
-    def test_includes_mm_ss_timestamp(self) -> None:
-        """Context block contains mm:ss timestamp marker."""
-        chunks = [
-            {
-                "chunk_id": "c1",
-                "content": "Test content",
-                "video_id": "v1",
-                "video_title": "My Video",
-                "video_url": "https://youtube.com/watch?v=abc",
-                "start_seconds": 62.5,  # 1:02
-                "end_seconds": 70.0,
-                "snippet": "Test snippet",
-                "score": 0.9,
-            }
-        ]
-        ctx = _format_context(chunks)
-        assert "01:02" in ctx
-
-    def test_zero_seconds_formats_correctly(self) -> None:
-        """Zero start_seconds formats as 00:00."""
-        chunks = [
-            {
-                "chunk_id": "c1",
-                "content": "Test content",
-                "video_id": "v1",
-                "video_title": "My Video",
-                "video_url": "https://youtube.com/watch?v=abc",
-                "start_seconds": 0.0,
-                "end_seconds": 10.0,
-                "snippet": "Test snippet",
-                "score": 0.9,
-            }
-        ]
-        ctx = _format_context(chunks)
-        assert "00:00" in ctx
-
-    def test_large_timestamp_formats_correctly(self) -> None:
-        """Timestamps > 60 minutes format correctly."""
-        chunks = [
-            {
-                "chunk_id": "c1",
-                "content": "Test content",
-                "video_id": "v1",
-                "video_title": "My Video",
-                "video_url": "https://youtube.com/watch?v=abc",
-                "start_seconds": 3661.0,  # 61:01
-                "end_seconds": 3670.0,
-                "snippet": "Test snippet",
-                "score": 0.9,
-            }
-        ]
-        ctx = _format_context(chunks)
-        assert "61:01" in ctx
-
-    def test_empty_chunks_returns_empty_string(self) -> None:
-        """Empty chunks list returns empty string."""
-        ctx = _format_context([])
-        assert ctx == ""
-
-    def test_multiple_chunks_have_separators(self) -> None:
-        """Multiple chunks are separated by --- delimiter."""
-        chunks = [
-            {
-                "chunk_id": f"c{i}",
-                "content": f"Content {i}",
-                "video_id": "v1",
-                "video_title": "Video",
-                "video_url": "https://youtube.com/watch?v=abc",
-                "start_seconds": float(i * 10),
-                "end_seconds": float((i + 1) * 10),
-                "snippet": f"Snippet {i}",
-                "score": 0.9,
-            }
-            for i in range(3)
-        ]
-        ctx = _format_context(chunks)
-        assert "---" in ctx
 
 
 class TestCitationObjectShape:
@@ -643,7 +540,7 @@ class TestRefusalSourcesSuppressionIntegration:
     async def test_sources_event_suppressed_on_refusal(self) -> None:
         """When LLM refuses, the sources SSE event must not be emitted."""
         import json
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from httpx import ASGITransport, AsyncClient
 
@@ -667,9 +564,17 @@ class TestRefusalSourcesSuppressionIntegration:
             }
         ]
 
-        async def mock_stream_chat(*args, **kwargs):
+        # Tool-driven architecture: the executor populates tool_chunks_acc via
+        # an injected closure. We simulate a successful search + then a refusal
+        # response by calling the executor ourselves inside mock_stream_chat.
+        async def mock_stream_chat(messages, tools=None, tool_executor=None, max_tool_calls=0):
+            if tool_executor is not None:
+                await tool_executor("search_videos", json.dumps({"query": "test"}))
             yield refusal_chunk
             yield done_chunk
+
+        async def mock_execute_tool(name, raw_args, video_id_whitelist=None):
+            return {"ok": True, "text": "context", "chunks": source_citations}
 
         from uuid import uuid4
 
@@ -701,23 +606,17 @@ class TestRefusalSourcesSuppressionIntegration:
         async def mock_list_messages(conv_id, user_id):
             return []
 
-        # Patch users_repo.get_user_by_id (used by get_current_user in auth.dependencies)
+        async def mock_list_videos():
+            return [{"id": "v1", "title": "Test Video", "url": "u"}]
+
         with (
             patch("backend.auth.dependencies.users_repo.get_user_by_id", mock_get_user_by_id),
             patch("backend.db.repository.get_conversation", mock_get_conversation),
             patch("backend.db.repository.create_message", mock_create_message),
             patch("backend.db.repository.list_messages", mock_list_messages),
+            patch("backend.db.repository.list_videos", mock_list_videos),
             patch("backend.routes.messages.stream_chat", mock_stream_chat),
-            patch(
-                "backend.routes.messages.embed_text",
-                new_callable=AsyncMock,
-                return_value=[[0.1] * 1536],
-            ),
-            patch(
-                "backend.routes.messages.retrieve_hybrid",
-                new_callable=AsyncMock,
-                return_value=source_citations,
-            ),
+            patch("backend.routes.messages.execute_tool", mock_execute_tool),
         ):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -738,7 +637,7 @@ class TestRefusalSourcesSuppressionIntegration:
     async def test_sources_event_emitted_on_normal_answer(self) -> None:
         """When LLM gives a normal answer, sources SSE event IS emitted."""
         import json
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from httpx import ASGITransport, AsyncClient
 
@@ -762,9 +661,14 @@ class TestRefusalSourcesSuppressionIntegration:
             }
         ]
 
-        async def mock_stream_chat(*args, **kwargs):
+        async def mock_stream_chat(messages, tools=None, tool_executor=None, max_tool_calls=0):
+            if tool_executor is not None:
+                await tool_executor("search_videos", json.dumps({"query": "test"}))
             yield answer_chunk
             yield done_chunk
+
+        async def mock_execute_tool(name, raw_args, video_id_whitelist=None):
+            return {"ok": True, "text": "context", "chunks": source_citations}
 
         from uuid import uuid4
 
@@ -796,22 +700,17 @@ class TestRefusalSourcesSuppressionIntegration:
         async def mock_list_messages(conv_id, user_id):
             return []
 
+        async def mock_list_videos():
+            return [{"id": "v1", "title": "Test Video", "url": "u"}]
+
         with (
             patch("backend.auth.dependencies.users_repo.get_user_by_id", mock_get_user_by_id),
             patch("backend.db.repository.get_conversation", mock_get_conversation),
             patch("backend.db.repository.create_message", mock_create_message),
             patch("backend.db.repository.list_messages", mock_list_messages),
+            patch("backend.db.repository.list_videos", mock_list_videos),
             patch("backend.routes.messages.stream_chat", mock_stream_chat),
-            patch(
-                "backend.routes.messages.embed_text",
-                new_callable=AsyncMock,
-                return_value=[[0.1] * 1536],
-            ),
-            patch(
-                "backend.routes.messages.retrieve_hybrid",
-                new_callable=AsyncMock,
-                return_value=source_citations,
-            ),
+            patch("backend.routes.messages.execute_tool", mock_execute_tool),
         ):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
