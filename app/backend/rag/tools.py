@@ -119,7 +119,11 @@ GET_VIDEO_TRANSCRIPT_TOOL: dict[str, Any] = {
             "properties": {
                 "video_id": {
                     "type": "string",
-                    "description": "Internal video_id. Must come from a prior search result or the catalog.",
+                    "description": (
+                        "The internal video_id — copy the value shown as "
+                        "'(video_id: ...)' in a prior search result. This is NOT "
+                        "the YouTube id from the video URL."
+                    ),
                 }
             },
             "required": ["video_id"],
@@ -229,10 +233,18 @@ def _format_search_results(chunks: list[dict]) -> str:
     for c in chunks:
         title = c.get("video_title") or "Unknown Video"
         chunk_id = c.get("chunk_id") or ""
+        video_id = c.get("video_id") or ""
         start = int(c.get("start_seconds") or 0.0)
         mins, secs = divmod(start, 60)
         marker = f"[c:{chunk_id}] " if chunk_id else ""
-        parts.append(f"{marker}{title} at {mins:02d}:{secs:02d}\n{c.get('content', '')}")
+        # Surface the internal video_id so the model can pass a valid id to
+        # get_video_transcript. Without it the model guesses — usually the
+        # YouTube id lifted from the URL — and the transcript tool's whitelist
+        # rejects it, leaving get_video_transcript effectively unusable.
+        vid = f" (video_id: {video_id})" if video_id else ""
+        parts.append(
+            f"{marker}{title}{vid} at {mins:02d}:{secs:02d}\n{c.get('content', '')}"
+        )
     return "\n\n---\n\n".join(parts)
 
 

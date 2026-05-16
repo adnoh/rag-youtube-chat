@@ -544,6 +544,9 @@ def test_search_results_formatter_renders_timestamps_and_title() -> None:
     text = _format_search_results(_FAKE_CHUNKS)
     assert "How RAG Works" in text
     assert "at 00:00" in text
+    # Regression: the internal video_id must be surfaced so the model can pass
+    # a valid id to get_video_transcript instead of guessing the YouTube id.
+    assert "video_id: v1" in text
 
 
 def test_transcript_formatter_handles_60_minute_edge() -> None:
