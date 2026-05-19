@@ -10,7 +10,7 @@ describe('Message — streamingStatus rendering', () => {
         role="assistant"
         content=""
         isStreaming={true}
-        streamingStatus={{ tool: 'search_videos', subject: 'building agents' }}
+        streamingStatus={{ tool: 'search_videos', subject: 'building agents', label: '' }}
       />,
     );
     expect(screen.getByText('Searching: building agents…')).toBeInTheDocument();
@@ -23,7 +23,7 @@ describe('Message — streamingStatus rendering', () => {
         role="assistant"
         content=""
         isStreaming={true}
-        streamingStatus={{ tool: 'unknown_tool', subject: '' }}
+        streamingStatus={{ tool: 'unknown_tool', subject: '', label: '' }}
       />,
     );
     expect(screen.getByText('Working…')).toBeInTheDocument();
@@ -45,11 +45,51 @@ describe('Message — streamingStatus rendering', () => {
         role="assistant"
         content="Answer here."
         isStreaming={true}
-        streamingStatus={{ tool: 'search_videos', subject: 'building agents' }}
+        streamingStatus={{ tool: 'search_videos', subject: 'building agents', label: '' }}
       />,
     );
     expect(screen.getByText('Answer here.')).toBeInTheDocument();
     expect(screen.queryByText(/Searching/)).not.toBeInTheDocument();
+  });
+
+  it('renders the tool-aware label when status carries a label', () => {
+    render(
+      <Message
+        role="assistant"
+        content=""
+        isStreaming={true}
+        streamingStatus={{
+          tool: 'get_video_transcript',
+          subject: 'abc123',
+          label: 'Reading transcript: How to Build AI Agents',
+        }}
+      />,
+    );
+    expect(screen.getByText('Reading transcript: How to Build AI Agents…')).toBeInTheDocument();
+  });
+
+  it('falls back to subject-based text when label is absent', () => {
+    render(
+      <Message
+        role="assistant"
+        content=""
+        isStreaming={true}
+        streamingStatus={{ tool: 'search_videos', subject: 'building agents', label: '' }}
+      />,
+    );
+    expect(screen.getByText('Searching: building agents…')).toBeInTheDocument();
+  });
+
+  it('falls back to Searching when label is empty string but subject is present', () => {
+    render(
+      <Message
+        role="assistant"
+        content=""
+        isStreaming={true}
+        streamingStatus={{ tool: 'unknown_tool', subject: 'agents', label: '' }}
+      />,
+    );
+    expect(screen.getByText('Searching: agents…')).toBeInTheDocument();
   });
 });
 

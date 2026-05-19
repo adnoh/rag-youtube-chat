@@ -17,6 +17,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any, cast
 
+import asyncpg
 from openai import APIConnectionError, APIError, APIStatusError, AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
 
@@ -28,6 +29,7 @@ from backend.config import (
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
 )
+from backend.db import repository
 from backend.rag import catalog
 
 logger = logging.getLogger(__name__)
@@ -120,8 +122,8 @@ async def build_system_prompt(max_tool_calls: int = 0, is_member: bool = False) 
     ``cache_control`` is appended so Anthropic can cache the static content.
 
     The catalog block is filtered by ``is_member``: non-members see only
-    ``source_type='youtube'`` videos, mirroring the retrieval-layer ACL
-    (issue #147). Without this filter, non-members would see every paid
+    ``source_type='youtube'`` videos, mirroring the retrieval-layer ACL.
+    Without this filter, non-members would see every paid
     Dynamous lesson title and id in the cached prompt — defense-in-depth
     blocks transcript retrieval, but the model can still leak titles and
     ids in its prose by referring to "the catalog".
@@ -169,6 +171,36 @@ def _extract_tool_subject(tool_name: str, tool_args_raw: str) -> str:
     return ""
 
 
+async def _build_tool_status_label(tool_name: str, tool_args_raw: str) -> str:
+    """Build a human-readable, tool-aware label for a tool_call_start event.
+
+    Search tools render the query in quotes; get_video_transcript resolves
+    the video title from the videos table, falling back to the raw id if
+    the lookup fails or returns nothing. Returns "" for unknown tools or an
+    unparseable subject — the frontend then shows a neutral "Working…".
+    """
+    subject = _extract_tool_subject(tool_name, tool_args_raw)
+    if tool_name in ("search_videos", "keyword_search_videos", "semantic_search_videos"):
+        return f'Searching the library: "{subject}"' if subject else "Searching the library"
+    if tool_name == "get_video_transcript":
+        if not subject:
+            return ""
+        title = subject  # fall back to the raw id
+        try:
+            video = await repository.get_video(subject)
+        except (asyncpg.PostgresError, RuntimeError, ConnectionError, OSError) as exc:
+            logger.warning(
+                "_build_tool_status_label: DB lookup failed for video %s: %s",
+                subject,
+                exc,
+            )
+            video = None
+        if video and video.get("title"):
+            title = str(video["title"])
+        return f"Reading transcript: {title}"
+    return ""
+
+
 async def stream_chat(
     messages: list[dict],
     tools: list[dict] | None = None,
@@ -191,7 +223,7 @@ async def stream_chat(
     not trigger false positive refusals.
 
     ``is_member`` flows through to ``build_system_prompt`` so the catalog
-    block (issue #147) only lists YouTube videos for non-members.
+    block only lists YouTube videos for non-members.
     """
     client = _get_async_client()
     tools_active = bool(tools) and tool_executor is not None and max_tool_calls > 0
@@ -359,9 +391,10 @@ async def stream_chat(
                     tool_args_raw = tc["function"]["arguments"]
                     if tool_calls_made < max_tool_calls:
                         subject = _extract_tool_subject(tool_name, tool_args_raw)
+                        label = await _build_tool_status_label(tool_name, tool_args_raw)
                         yield (
                             "event: status\n"
-                            f"data: {json.dumps({'type': 'tool_call_start', 'tool': tool_name, 'subject': subject})}\n\n"
+                            f"data: {json.dumps({'type': 'tool_call_start', 'tool': tool_name, 'subject': subject, 'label': label})}\n\n"
                         )
                         try:
                             payload = await tool_executor(tool_name, tool_args_raw)

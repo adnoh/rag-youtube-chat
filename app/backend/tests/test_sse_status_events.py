@@ -71,7 +71,11 @@ class TestSseStatusEvents:
     """Verify that `stream_chat` emits `event: status` SSE events around
     each tool-executor call."""
 
-    async def _collect(self, tool_args: str = '{"query": "building agents"}') -> list[str]:
+    async def _collect(
+        self,
+        tool_name: str = "search_videos",
+        tool_args: str = '{"query": "building agents"}',
+    ) -> list[str]:
         """Drive `stream_chat` with a canned two-round flow and return emitted chunks.
 
         Round 1: model streams a single tool_call.
@@ -81,9 +85,7 @@ class TestSseStatusEvents:
         from backend.llm.openrouter import stream_chat
 
         round1_chunks = [
-            _FakeDeltaChunk(
-                tool_calls=[_FakeToolCallDelta(0, call_id="call_1", name="search_videos")]
-            ),
+            _FakeDeltaChunk(tool_calls=[_FakeToolCallDelta(0, call_id="call_1", name=tool_name)]),
             _FakeDeltaChunk(tool_calls=[_FakeToolCallDelta(0, arguments=tool_args)]),
             _FakeDeltaChunk(finish_reason="tool_calls"),
         ]
@@ -113,10 +115,14 @@ class TestSseStatusEvents:
                 "backend.llm.openrouter.build_system_prompt",
                 new=AsyncMock(return_value=[{"type": "text", "text": "system"}]),
             ),
+            patch(
+                "backend.llm.openrouter.repository.get_video",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             async for chunk in stream_chat(
                 messages=[{"role": "user", "content": "hi"}],
-                tools=[{"type": "function", "function": {"name": "search_videos"}}],
+                tools=[{"type": "function", "function": {"name": tool_name}}],
                 tool_executor=instant_executor,
                 max_tool_calls=3,
             ):
@@ -181,10 +187,27 @@ class TestSseStatusEvents:
                 assert isinstance(payload["subject"], str)
                 assert payload["tool"] == "search_videos"
                 assert payload["subject"] == "building agents"
+                assert "label" in payload, f"tool_call_start missing 'label': {payload}"
+                assert isinstance(payload["label"], str)
+                assert payload["label"] == 'Searching the library: "building agents"'
             elif payload["type"] == "tool_call_done":
                 assert payload["tool"] == "search_videos"
             else:
                 raise AssertionError(f"unexpected status event type: {payload['type']}")
+
+    async def test_status_event_payload_shape_for_transcript_tool(self) -> None:
+        """Transcript tool emits the correct label via the full stream loop."""
+        emitted = await self._collect(
+            tool_name="get_video_transcript",
+            tool_args='{"video_id": "abc123"}',
+        )
+        start_events = [c for c in emitted if "tool_call_start" in c]
+        assert len(start_events) == 1
+        lines = start_events[0].strip().split("\n")
+        data_line = next(line for line in lines if line.startswith("data: "))
+        payload = json.loads(data_line[len("data: ") :])
+        assert payload["tool"] == "get_video_transcript"
+        assert payload["label"] == "Reading transcript: abc123"
 
 
 @pytest.mark.parametrize(
@@ -212,6 +235,75 @@ def test_extract_tool_subject_type_error() -> None:
 
     result = _extract_tool_subject("search_videos", None)  # type: ignore[arg-type]
     assert result == ""
+
+
+@pytest.mark.parametrize(
+    "tool_name,args_raw,expected",
+    [
+        ("search_videos", json.dumps({"query": "agents"}), 'Searching the library: "agents"'),
+        ("keyword_search_videos", json.dumps({"query": "RAG"}), 'Searching the library: "RAG"'),
+        ("semantic_search_videos", json.dumps({"query": "LLM"}), 'Searching the library: "LLM"'),
+        ("search_videos", json.dumps({}), "Searching the library"),
+        ("unknown_tool", json.dumps({"query": "x"}), ""),
+        ("get_video_transcript", json.dumps({}), ""),
+    ],
+)
+async def test_build_tool_status_label_no_db(tool_name, args_raw, expected) -> None:
+    from backend.llm.openrouter import _build_tool_status_label
+
+    assert await _build_tool_status_label(tool_name, args_raw) == expected
+
+
+async def test_build_tool_status_label_transcript_resolves_title() -> None:
+    from backend.llm.openrouter import _build_tool_status_label
+
+    with patch(
+        "backend.llm.openrouter.repository.get_video",
+        new=AsyncMock(return_value={"title": "How to Build AI Agents"}),
+    ):
+        label = await _build_tool_status_label(
+            "get_video_transcript", json.dumps({"video_id": "abc123"})
+        )
+    assert label == "Reading transcript: How to Build AI Agents"
+
+
+async def test_build_tool_status_label_transcript_falls_back_to_id() -> None:
+    from backend.llm.openrouter import _build_tool_status_label
+
+    with patch(
+        "backend.llm.openrouter.repository.get_video",
+        new=AsyncMock(side_effect=RuntimeError("db down")),
+    ):
+        label = await _build_tool_status_label(
+            "get_video_transcript", json.dumps({"video_id": "abc123"})
+        )
+    assert label == "Reading transcript: abc123"
+
+
+async def test_build_tool_status_label_transcript_falls_back_when_not_found() -> None:
+    from backend.llm.openrouter import _build_tool_status_label
+
+    with patch(
+        "backend.llm.openrouter.repository.get_video",
+        new=AsyncMock(return_value=None),
+    ):
+        label = await _build_tool_status_label(
+            "get_video_transcript", json.dumps({"video_id": "abc123"})
+        )
+    assert label == "Reading transcript: abc123"
+
+
+async def test_build_tool_status_label_transcript_falls_back_when_title_missing() -> None:
+    from backend.llm.openrouter import _build_tool_status_label
+
+    with patch(
+        "backend.llm.openrouter.repository.get_video",
+        new=AsyncMock(return_value={"id": "abc123"}),
+    ):
+        label = await _build_tool_status_label(
+            "get_video_transcript", json.dumps({"video_id": "abc123"})
+        )
+    assert label == "Reading transcript: abc123"
 
 
 class TestCapReachedNoStatusEvents:

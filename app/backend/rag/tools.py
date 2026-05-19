@@ -242,9 +242,7 @@ def _format_search_results(chunks: list[dict]) -> str:
         # YouTube id lifted from the URL — and the transcript tool's whitelist
         # rejects it, leaving get_video_transcript effectively unusable.
         vid = f" (video_id: {video_id})" if video_id else ""
-        parts.append(
-            f"{marker}{title}{vid} at {mins:02d}:{secs:02d}\n{c.get('content', '')}"
-        )
+        parts.append(f"{marker}{title}{vid} at {mins:02d}:{secs:02d}\n{c.get('content', '')}")
     return "\n\n---\n\n".join(parts)
 
 
