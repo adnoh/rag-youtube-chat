@@ -173,14 +173,17 @@ nodes:
       BRANCH=$(git branch --show-current)
       CELL="OO"
       CELL_DESC="plan=Opus, impl=Opus"
+      # Extract this workflow's run-id from $ARTIFACTS_DIR for the evaluator
+      RUN_ID=$(basename "$ARTIFACTS_DIR")
 
       # Push the branch
       git push -u origin "$BRANCH"
 
-      # Build the PR body
+      # Build the PR body (run-id lets the evaluator find plan.md + exploration.md)
       BODY="Fixes #${ISSUE_NUM}
 
       **Benchmark cell:** \`${CELL}\` (${CELL_DESC})
+      **Source run-id:** \`${RUN_ID}\`
 
       Held-constant: explore + self-review on Sonnet.
 

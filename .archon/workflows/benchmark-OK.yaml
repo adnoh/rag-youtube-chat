@@ -126,12 +126,14 @@ nodes:
       BRANCH=$(git branch --show-current)
       CELL="OK"
       CELL_DESC="plan=Opus, impl=Kimi"
+      RUN_ID=$(basename "$ARTIFACTS_DIR")
 
       git push -u origin "$BRANCH"
 
       BODY="Fixes #${ISSUE_NUM}
 
       **Benchmark cell:** \`${CELL}\` (${CELL_DESC})
+      **Source run-id:** \`${RUN_ID}\`
 
       Held-constant: explore + self-review on Sonnet.
 

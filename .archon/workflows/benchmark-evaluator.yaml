@@ -58,6 +58,38 @@ nodes:
     depends_on: [fetch-pr]
     timeout: 20000
 
+  # Pull the source workflow's plan.md + exploration.md so the evaluator can
+  # score plan_impl_fidelity properly. The benchmark workflow stamped its own
+  # run-id into the PR body via "Source run-id: <uuid>" — we extract that and
+  # copy the corresponding artifacts into this evaluator's $ARTIFACTS_DIR.
+  - id: fetch-source-artifacts
+    bash: |
+      set -euo pipefail
+      PR_NUMBER=$(cat "$ARTIFACTS_DIR/.pr-number")
+      PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q '.body')
+
+      # Extract the UUID after "Source run-id:" — tolerant of backticks + whitespace
+      RUN_ID=$(echo "$PR_BODY" | grep -oE 'Source run-id:[^a-f0-9]*[a-f0-9-]{36}' | grep -oE '[a-f0-9-]{36}' | head -1)
+
+      if [ -z "$RUN_ID" ]; then
+        echo "WARNING: no Source run-id found in PR body; plan_impl_fidelity will default to not-visible"
+        exit 0
+      fi
+
+      # Archon stores artifacts at this path per the smoke-test verification on 2026-05-20
+      SOURCE_DIR="$HOME/.archon/workspaces/coleam00/dark-factory-experiment/artifacts/runs/$RUN_ID"
+
+      if [ ! -d "$SOURCE_DIR" ]; then
+        echo "WARNING: source artifacts dir not found: $SOURCE_DIR"
+        exit 0
+      fi
+
+      cp "$SOURCE_DIR/plan.md" "$ARTIFACTS_DIR/source-plan.md" 2>/dev/null && echo "Copied plan.md" || echo "(no source plan.md)"
+      cp "$SOURCE_DIR/exploration.md" "$ARTIFACTS_DIR/source-exploration.md" 2>/dev/null && echo "Copied exploration.md" || echo "(no source exploration.md)"
+      echo "Source run-id: $RUN_ID"
+    depends_on: [fetch-pr]
+    timeout: 15000
+
   - id: evaluate
     prompt: |
       You are Cole's second brain, scoring a benchmark PR. This PR was produced
@@ -76,6 +108,17 @@ nodes:
 
       ## Commit Log (shows split between impl + self-review)
       $fetch-commit-log.output
+
+      ## Source workflow artifacts
+
+      The benchmark workflow that produced this PR wrote its planning artifacts
+      to disk. They have been copied into this evaluator's artifacts dir:
+
+      - `$ARTIFACTS_DIR/source-plan.md` — the plan the benchmark's `plan` node
+        produced. Use the Read tool to load it. If it doesn't exist (silent),
+        plan-fidelity can't be scored — fall back to "not visible".
+      - `$ARTIFACTS_DIR/source-exploration.md` — the codebase exploration the
+        benchmark's `explore` node produced. Optional context.
 
       ## Instructions
 
@@ -97,9 +140,12 @@ nodes:
          10 = production-grade. 1 = sloppy.
       6. **test_discipline** — Meaningful tests added for the change, or existing
          tests gamed? 10 = good targeted tests. 1 = no tests / tests modified to pass.
-      7. **plan_impl_fidelity** — Does the implementation match what the plan
-         commit history suggests was planned? If you can't tell from the commits,
-         score 5 and note "not visible".
+      7. **plan_impl_fidelity** — Read `$ARTIFACTS_DIR/source-plan.md`. Compare
+         what was planned against what the diff actually delivered. 10 = the
+         implementation faithfully executes the plan. 5 = partial drift (some
+         items planned but not done, or done items not in the plan). 1 = plan
+         and impl diverge completely. If `source-plan.md` doesn't exist on disk,
+         score 5 and note "not visible (source-plan.md not present)".
 
       ### Write your output to TWO places:
 
@@ -127,7 +173,7 @@ nodes:
       ```
 
       `total` is the sum of the 7 dimension scores (out of 70).
-    depends_on: [fetch-issue, fetch-diff, fetch-commit-log]
+    depends_on: [fetch-issue, fetch-diff, fetch-commit-log, fetch-source-artifacts]
     context: fresh
     output_format:
       type: object

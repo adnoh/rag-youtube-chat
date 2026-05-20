@@ -140,9 +140,9 @@ gh issue view $ISSUE --json labels --jq '.labels[].name' | grep factory:in-progr
 
 Anthropic 5-hour window applies to Sonnet + Opus combined. Org-level overage is OFF (per the dispatch log: `overageDisabledReason: org_level_disabled`). 12 workflows × ~3 Opus/Sonnet calls each = ~36 calls, plus 12 evaluator Opus calls = ~48 total. Should fit in one 5-hour bucket if the bucket is fresh. Watch for `rateLimitType:five_hour, status:exceeded` in dispatch logs.
 
-### 7. Plan-to-impl fidelity is partially blind
+### 7. Plan-to-impl fidelity wiring (resolved 2026-05-20)
 
-The current workflow writes `plan.md` to `$ARTIFACTS_DIR` which doesn't persist into the PR. The evaluator's `plan_impl_fidelity` dimension defaults to 5/10 with "not visible" when it can't read the plan. **Fix for real benchmark runs:** add a step in `implement` that copies `$ARTIFACTS_DIR/plan.md` to `.archon/benchmark-plan.md` and commits it as part of the impl commit. Then the evaluator can read it via the diff.
+The benchmark workflows now stamp their own run-id into the PR body (extracted from `basename "$ARTIFACTS_DIR"`). The evaluator parses that run-id out and copies the source `plan.md` + `exploration.md` from `~/.archon/workspaces/coleam00/dark-factory-experiment/artifacts/runs/<run-id>/` into its own `$ARTIFACTS_DIR`. Opus then reads them via the Read tool to score `plan_impl_fidelity` against the actual plan, not against commit history alone. If the run-id is missing or the artifacts dir was cleaned up, the evaluator falls back to "not visible" and still scores the other 6 dimensions.
 
 ## Smoke test results (2026-05-20)
 
